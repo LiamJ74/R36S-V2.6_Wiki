@@ -6,6 +6,9 @@
 #   powershell -ExecutionPolicy Bypass -File download_covers.ps1
 #   powershell -ExecutionPolicy Bypass -File download_covers.ps1 -Platform GBA
 #   powershell -ExecutionPolicy Bypass -File download_covers.ps1 -RootPath "D:\"
+#
+# The script uses the GitHub API to list all available boxarts for each
+# platform, then fuzzy-matches ROM names against the available thumbnails.
 ###############################################################################
 
 param(
@@ -49,80 +52,135 @@ $romExtMap = @{
 
 $baseUrl = "https://raw.githubusercontent.com/libretro-thumbnails"
 
-# Convert ROM name to libretro thumbnail name
-function Get-LibretroName($baseName) {
-    $n = $baseName
-    # Remove region/language tags like (Europe) (En,Fr,De) (Rev 1) etc.
-    $n = $n -replace '\s*\([^)]*\)', ''
-    # Remove trailing whitespace
-    $n = $n.Trim()
-    # Replace special characters with underscore
-    $n = $n -replace '[&\*/:\"<>\?\\\|]', '_'
-    # Replace spaces with underscore
-    $n = $n -replace ' ', '_'
-    return $n
+# Extract keywords from a name (2+ alphanumeric chars, lowercased)
+function Get-Keywords($name) {
+    $clean = $name -replace '_', ' '
+    $words = [regex]::Matches($clean, '[a-zA-Z0-9]{2,}') | ForEach-Object { $_.Value.ToLower() }
+    # Filter out common noise words
+    $noise = @('the', 'of', 'and', 'in', 'to', 'for', 'usa', 'europe', 'japan', 'world',
+               'rev', 'en', 'fr', 'de', 'es', 'it', 'proto', 'beta', 'demo', 'unl',
+               'sfc', 'nes', 'snes', 'gba', 'gbc')
+    return $words | Where-Object { $noise -notcontains $_ }
 }
 
-# Try multiple name variations to find a match
-function Try-Download($repo, $baseName, $destPath) {
-    $variations = @()
+# Score how well a ROM name matches a thumbnail name
+function Get-MatchScore($romName, $thumbName) {
+    $romWords = Get-Keywords $romName
+    $thumbWords = Get-Keywords $thumbName
+    if ($romWords.Count -eq 0 -or $thumbWords.Count -eq 0) { return 0 }
 
-    # Variation 1: full basename (with region tags)
-    $v1 = $baseName -replace '[&\*/:\"<>\?\\\|]', '_'
-    $v1 = $v1 -replace ' ', '_'
-    $variations += $v1
-
-    # Variation 2: without region/language tags
-    $v2 = Get-LibretroName $baseName
-    if ($v2 -ne $v1) { $variations += $v2 }
-
-    # Variation 3: without " - " subtitle
-    if ($v2 -match '^(.+?)_-_') {
-        $variations += $Matches[1]
+    $score = 0
+    $matched = 0
+    foreach ($rw in $romWords) {
+        foreach ($tw in $thumbWords) {
+            if ($rw -eq $tw) {
+                $score += 3
+                $matched++
+                break
+            } elseif ($tw.Contains($rw) -or $rw.Contains($tw)) {
+                $score += 1
+                $matched++
+                break
+            }
+        }
     }
 
-    foreach ($name in $variations) {
-        $url = "$baseUrl/$repo/master/Named_Boxarts/$name.png"
-        try {
-            $tempFile = [System.IO.Path]::GetTempFileName()
-            $webClient = New-Object System.Net.WebClient
-            $webClient.DownloadFile($url, $tempFile)
-            $webClient.Dispose()
+    # Require that most ROM keywords matched (at least 80%)
+    if ($romWords.Count -gt 0) {
+        $ratio = $matched / $romWords.Count
+        if ($ratio -lt 0.8) { return 0 }
+    }
 
-            # Resize to 320x240
-            $img = [System.Drawing.Image]::FromFile($tempFile)
-            $bmp = New-Object System.Drawing.Bitmap(320, 240, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-            $g = [System.Drawing.Graphics]::FromImage($bmp)
-            $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-            $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-            $g.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+    return $score
+}
 
-            # Fit maintaining aspect ratio on white background
-            $ratioX = 320 / $img.Width
-            $ratioY = 240 / $img.Height
-            $ratio = [Math]::Min($ratioX, $ratioY)
-            $newW = [int]($img.Width * $ratio)
-            $newH = [int]($img.Height * $ratio)
-            $posX = [int]((320 - $newW) / 2)
-            $posY = [int]((240 - $newH) / 2)
-
-            $g.Clear([System.Drawing.Color]::White)
-            $g.DrawImage($img, $posX, $posY, $newW, $newH)
-            $g.Dispose()
-            $img.Dispose()
-
-            $bmp.Save($destPath, [System.Drawing.Imaging.ImageFormat]::Png)
-            $bmp.Dispose()
-
-            Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
-            return $name
-        } catch {
-            Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
-            continue
+# Fetch available thumbnails for a repo via GitHub API
+function Get-AvailableThumbnails($repo) {
+    $apiUrl = "https://api.github.com/repos/libretro-thumbnails/$repo/git/trees/master?recursive=1"
+    try {
+        $response = Invoke-RestMethod -Uri $apiUrl -Method Get -Headers @{ 'User-Agent' = 'R36S-Cover-Downloader' } -ErrorAction Stop
+        $thumbs = @()
+        foreach ($item in $response.tree) {
+            if ($item.path -match '^Named_Boxarts/(.+)\.png$') {
+                $thumbs += $Matches[1]
+            }
         }
+        return $thumbs
+    } catch {
+        Write-Output "    ERREUR API GitHub: $($_.Exception.Message)"
+        return @()
+    }
+}
+
+# Download and resize a thumbnail
+function Download-Thumbnail($repo, $thumbName, $destPath) {
+    $encodedName = [Uri]::EscapeDataString($thumbName)
+    $url = "$baseUrl/$repo/master/Named_Boxarts/$encodedName.png"
+    try {
+        $tempFile = [System.IO.Path]::GetTempFileName()
+        $webClient = New-Object System.Net.WebClient
+        $webClient.DownloadFile($url, $tempFile)
+        $webClient.Dispose()
+
+        # Resize to 320x240
+        $img = [System.Drawing.Image]::FromFile($tempFile)
+        $bmp = New-Object System.Drawing.Bitmap(320, 240, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+        $g.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+
+        $ratioX = 320 / $img.Width
+        $ratioY = 240 / $img.Height
+        $ratio = [Math]::Min($ratioX, $ratioY)
+        $newW = [int]($img.Width * $ratio)
+        $newH = [int]($img.Height * $ratio)
+        $posX = [int]((320 - $newW) / 2)
+        $posY = [int]((240 - $newH) / 2)
+
+        $g.Clear([System.Drawing.Color]::White)
+        $g.DrawImage($img, $posX, $posY, $newW, $newH)
+        $g.Dispose()
+        $img.Dispose()
+
+        $bmp.Save($destPath, [System.Drawing.Imaging.ImageFormat]::Png)
+        $bmp.Dispose()
+
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+        return $true
+    } catch {
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+}
+
+# Find best matching thumbnail for a ROM
+function Find-BestMatch($romBaseName, $thumbnails) {
+    $bestScore = 0
+    $bestMatch = $null
+
+    # Clean ROM name: remove region tags for matching
+    $cleanRom = $romBaseName -replace '\s*\([^)]*\)', ''
+    $cleanRom = $cleanRom.Trim()
+
+    foreach ($thumb in $thumbnails) {
+        $score = Get-MatchScore $cleanRom $thumb
+        if ($score -gt $bestScore) {
+            $bestScore = $score
+            $bestMatch = $thumb
+        }
+    }
+
+    # Require minimum score of 8 to avoid false matches (especially ROM hacks)
+    if ($bestScore -ge 8) {
+        return $bestMatch
     }
     return $null
 }
+
+###############################################################################
+# Main
+###############################################################################
 
 # Determine which platforms to process
 if ($Platform -ne "") {
@@ -181,16 +239,35 @@ foreach ($plat in $platformList) {
     Write-Output ""
     Write-Output "=== $plat : $($missing.Count) covers manquantes ==="
 
+    # Fetch available thumbnails from GitHub
+    Write-Output "    Chargement de la liste libretro-thumbnails/$repo..."
+    $thumbnails = Get-AvailableThumbnails $repo
+    if ($thumbnails.Count -eq 0) {
+        Write-Output "    Aucun thumbnail disponible (erreur API ou repo vide)"
+        continue
+    }
+    Write-Output "    $($thumbnails.Count) boxarts disponibles"
+
     if (-not (Test-Path $imagesPath)) {
         New-Item -ItemType Directory -Path $imagesPath -Force | Out-Null
     }
 
     foreach ($rom in $missing) {
         $destPath = Join-Path $imagesPath "$($rom.BaseName).png"
-        $result = Try-Download $repo $rom.BaseName $destPath
-        if ($result) {
-            Write-Output "  OK: $($rom.BaseName) (match: $result)"
-            $totalDownloaded++
+
+        # Find best match via fuzzy keyword matching
+        $bestMatch = Find-BestMatch $rom.BaseName $thumbnails
+
+        if ($bestMatch) {
+            $ok = Download-Thumbnail $repo $bestMatch $destPath
+            if ($ok) {
+                Write-Output "  OK: $($rom.BaseName)"
+                Write-Output "      -> $bestMatch"
+                $totalDownloaded++
+            } else {
+                Write-Output "  ECHEC DL: $($rom.BaseName) -> $bestMatch"
+                $totalMissing++
+            }
         } else {
             Write-Output "  INTROUVABLE: $($rom.BaseName)"
             $totalMissing++

@@ -286,17 +286,33 @@ powershell -ExecutionPolicy Bypass -File download_covers.ps1
 
 # Download covers for a specific platform only
 powershell -ExecutionPolicy Bypass -File download_covers.ps1 -Platform GBA
+
+# Use a different SD card drive letter
+powershell -ExecutionPolicy Bypass -File download_covers.ps1 -RootPath "D:\"
 ```
 
 The script will:
 1. Scan each platform folder for ROMs without a matching cover image
-2. Search the libretro-thumbnails repository for a matching boxart
-3. Download and resize it to 320x240 PNG
-4. Place it in the `images/` subfolder with the correct name
+2. Fetch the full list of available boxarts from the libretro-thumbnails GitHub repository (via API)
+3. Fuzzy-match each ROM name against available thumbnails
+4. Download and resize matched covers to 320x240 PNG
+5. Place them in the `images/` subfolder with the correct name
 
-### Libretro thumbnail URL pattern
+### How matching works
 
-Each platform maps to a libretro-thumbnails repository:
+The script uses keyword-based fuzzy matching to find the best cover for each ROM:
+
+1. **Keyword extraction** — ROM and thumbnail names are split into words (2+ alphanumeric chars), lowercased. Common noise words are filtered out (region tags like `usa`, `europe`, system tags like `gba`, `snes`, etc.)
+2. **Scoring** — Each ROM keyword is compared against thumbnail keywords. Exact matches score 3 points, partial/substring matches score 1 point
+3. **Thresholds** — A match is accepted only if at least **80% of the ROM's keywords** matched AND the total score is **8 or higher**. This prevents false positives
+
+### ROM hacks
+
+**ROM hacks are intentionally not matched** by the download script. Their custom names (e.g., "Pokemon - Blazing Emerald", "Zelda - Goddess of Wisdom") don't match any official title in the libretro database, so they appear as `INTROUVABLE` in the output. This is by design — ROM hack covers should be added manually to `images/` with the correct filename (320x240 PNG, same basename as the ROM).
+
+### Platform mapping
+
+Each local folder maps to a libretro-thumbnails repository:
 
 | Folder | Libretro Repository |
 |--------|-------------------|
@@ -313,12 +329,10 @@ Each platform maps to a libretro-thumbnails repository:
 | PS | `Sony_-_PlayStation` |
 | SFC | `Nintendo_-_Super_Nintendo_Entertainment_System` |
 
-Images are at:
+Direct URL pattern for manual downloads:
 ```
 https://raw.githubusercontent.com/libretro-thumbnails/[REPO]/master/Named_Boxarts/[GAME_NAME].png
 ```
-
-Where `[GAME_NAME]` is the ROM basename with spaces and special characters (`& * / : " < > ? \ |`) replaced by underscores.
 
 ---
 
