@@ -230,6 +230,24 @@ def sync_sd_card(root_path: str, dry_run: bool = True):
 
         # Generer CSV
         current_roms = get_roms(dir_path, exts)
+
+        # PS special: pour les jeux BIN/CUE, le .cue est le jeu principal
+        if platform == 'PS' and current_roms:
+            import re
+            cue_files = [r for r in current_roms if r.suffix.lower() == '.cue']
+            cue_basenames = {r.stem for r in cue_files}
+            filtered = []
+            for rom in current_roms:
+                if rom.suffix.lower() == '.cue':
+                    filtered.append(rom)
+                elif rom.suffix.lower() == '.bin':
+                    bin_base = re.sub(r' \(Track \d+\)', '', rom.stem)
+                    if bin_base not in cue_basenames:
+                        filtered.append(rom)
+                else:
+                    filtered.append(rom)
+            current_roms = filtered
+
         old_csv = load_csv(csv_path)
 
         if current_roms:

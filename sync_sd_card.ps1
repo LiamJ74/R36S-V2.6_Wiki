@@ -45,6 +45,29 @@ $imgExtensions = @('.jpg', '.jpeg', '.png', '.bmp', '.gif')
 
 $platforms = $romExtMap.Keys | Sort-Object
 
+# Fonction: lister les ROMs d'un dossier (filtre les tracks BIN/CUE pour PS)
+function Get-GameRoms($dirPath, $exts, $platform) {
+    $allRoms = Get-ChildItem $dirPath -File -Force -ErrorAction SilentlyContinue | Where-Object { $exts -contains $_.Extension.ToLower() } | Sort-Object Name
+    if ($platform -eq 'PS' -and $allRoms.Count -gt 0) {
+        $cueFiles = $allRoms | Where-Object { $_.Extension.ToLower() -eq '.cue' }
+        $cueBaseNames = @{}
+        foreach ($c in $cueFiles) { $cueBaseNames[$c.BaseName] = $true }
+        $filtered = New-Object System.Collections.ArrayList
+        foreach ($rom in $allRoms) {
+            if ($rom.Extension.ToLower() -eq '.cue') {
+                [void]$filtered.Add($rom)
+            } elseif ($rom.Extension.ToLower() -eq '.bin') {
+                $binBase = $rom.BaseName -replace ' \(Track \d+\)', ''
+                if (-not $cueBaseNames.ContainsKey($binBase)) { [void]$filtered.Add($rom) }
+            } else {
+                [void]$filtered.Add($rom)
+            }
+        }
+        return $filtered
+    }
+    return $allRoms
+}
+
 Write-Output "============================================"
 Write-Output " SYNC SD CARD - $(if ($DryRun) { 'SIMULATION' } else { 'EXECUTION' })"
 Write-Output " Racine: $RootPath"
@@ -94,8 +117,8 @@ foreach ($dirName in $platforms) {
     $csvPath = Join-Path $dirPath "filelist.csv"
     $exts = $romExtMap[$dirName]
 
-    # Lister les ROMs reels
-    $romFiles = Get-ChildItem $dirPath -File -Force -ErrorAction SilentlyContinue | Where-Object { $exts -contains $_.Extension.ToLower() } | Sort-Object Name
+    # Lister les ROMs reels (filtre tracks PS)
+    $romFiles = Get-GameRoms $dirPath $exts $dirName
     $romBaseNames = @{}
     foreach ($r in $romFiles) { $romBaseNames[$r.BaseName] = $r.Name }
 
@@ -187,8 +210,8 @@ foreach ($dirName in $platforms) {
         }
     }
 
-    # Generer le CSV
-    $currentRoms = Get-ChildItem $dirPath -File -Force -ErrorAction SilentlyContinue | Where-Object { $exts -contains $_.Extension.ToLower() } | Sort-Object Name
+    # Generer le CSV (utilise les memes ROMs filtres)
+    $currentRoms = $romFiles
 
     # Charger l'ancien CSV
     $oldCsvData = @{}
@@ -240,7 +263,7 @@ if (Test-Path $allfilesPath) {
         $dirPath = Join-Path $RootPath $dirName
         if (-not (Test-Path $dirPath)) { continue }
         $exts = $romExtMap[$dirName]
-        $roms = Get-ChildItem $dirPath -File -Force -ErrorAction SilentlyContinue | Where-Object { $exts -contains $_.Extension.ToLower() } | Sort-Object Name
+        $roms = Get-GameRoms $dirPath $exts $dirName
 
         foreach ($rom in $roms) {
             $key = "$dirName/$($rom.Name)"
@@ -271,7 +294,7 @@ foreach ($dirName in $platforms) {
     $dirPath = Join-Path $RootPath $dirName
     if (-not (Test-Path $dirPath)) { continue }
     $exts = $romExtMap[$dirName]
-    $roms = Get-ChildItem $dirPath -File -Force -ErrorAction SilentlyContinue | Where-Object { $exts -contains $_.Extension.ToLower() }
+    $roms = Get-GameRoms $dirPath $exts $dirName
     foreach ($rom in $roms) { $validRoms["$dirName/$($rom.Name)"] = $true }
 }
 
@@ -311,7 +334,7 @@ foreach ($dirName in $platforms) {
     if (-not (Test-Path $dirPath)) { continue }
 
     $exts = $romExtMap[$dirName]
-    $romCount = (Get-ChildItem $dirPath -File -Force -ErrorAction SilentlyContinue | Where-Object { $exts -contains $_.Extension.ToLower() } | Measure-Object).Count
+    $romCount = (Get-GameRoms $dirPath $exts $dirName | Measure-Object).Count
     $imagesPath = Join-Path $dirPath "images"
     $imgCount = 0
     if (Test-Path $imagesPath) { $imgCount = (Get-ChildItem $imagesPath -File -ErrorAction SilentlyContinue | Measure-Object).Count }

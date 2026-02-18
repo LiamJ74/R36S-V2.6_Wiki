@@ -1,4 +1,4 @@
-# R36SX Fake 2.6 Retro Handheld — Complete Wiki
+# R36S Retro Handheld — Complete Wiki
 
 Complete guide for managing and customizing the **R36S** retro gaming handheld SD card.
 
@@ -13,9 +13,11 @@ The R36S is a cheap handheld sold under various brand names. It runs a Linux-bas
 - [Prerequisites](#prerequisites)
 - [Adding Games](#adding-games)
 - [Cover Images](#cover-images)
+- [Downloading Cover Art](#downloading-cover-art)
 - [Sync Scripts](#sync-scripts)
 - [File Formats](#file-formats)
 - [Supported ROM Extensions](#supported-rom-extensions)
+- [PS1 Notes](#ps1-notes)
 - [Customizing Platform Backgrounds](#customizing-platform-backgrounds)
 - [Firmware Internals](#firmware-internals)
 - [Troubleshooting](#troubleshooting)
@@ -255,8 +257,68 @@ Platform/filename.ext
 | MD (Mega Drive / Genesis) | `.md` `.gen` `.bin` `.zip` `.7z` `.smd` |
 | NGPC (Neo Geo Pocket Color) | `.ngp` `.ngc` `.zip` `.7z` |
 | PCE (PC Engine / TurboGrafx) | `.pce` `.zip` `.7z` |
-| PS (PlayStation) | `.img` `.iso` `.bin` `.cue` `.pbp` `.chd` `.zip` `.7z` |
+| PS (PlayStation) | `.img` `.iso` `.bin` `.cue` `.pbp` `.chd` `.zip` `.7z` (see [PS1 Notes](#ps1-notes)) |
 | SFC (Super Famicom / SNES) | `.sfc` `.smc` `.zip` `.7z` |
+
+### PS1 Notes
+
+PlayStation games often come as **BIN/CUE** pairs (or multi-track: one `.cue` + many `.bin` track files). The sync script handles this correctly:
+
+- The `.cue` file is treated as the game entry (it's what the emulator launches)
+- Associated `.bin` track files are ignored in game counts, CSV, and allfiles.lst
+- Standalone `.bin` files (without a matching `.cue`) are still treated as individual games
+
+**BIOS required:** PS1 emulation needs a BIOS file (`SCPH1001.BIN` or `SCPH5502.BIN`). Place it in `cubegm/lib/`. Without it, games will fail to launch and return to the game list after a few seconds.
+
+**Filenames:** Avoid commas, accents, and apostrophes in PS1 filenames — the script sanitizes them automatically and updates `.cue` file contents to match the renamed `.bin` files.
+
+---
+
+## Downloading Cover Art
+
+You can automatically download cover art from the [libretro-thumbnails](https://github.com/libretro-thumbnails/libretro-thumbnails) project.
+
+### Usage
+
+```powershell
+# Download missing covers for all platforms
+powershell -ExecutionPolicy Bypass -File download_covers.ps1
+
+# Download covers for a specific platform only
+powershell -ExecutionPolicy Bypass -File download_covers.ps1 -Platform GBA
+```
+
+The script will:
+1. Scan each platform folder for ROMs without a matching cover image
+2. Search the libretro-thumbnails repository for a matching boxart
+3. Download and resize it to 320x240 PNG
+4. Place it in the `images/` subfolder with the correct name
+
+### Libretro thumbnail URL pattern
+
+Each platform maps to a libretro-thumbnails repository:
+
+| Folder | Libretro Repository |
+|--------|-------------------|
+| ATARI | `Atari_-_2600` |
+| FC | `Nintendo_-_Nintendo_Entertainment_System` |
+| GB | `Nintendo_-_Game_Boy` |
+| GBA | `Nintendo_-_Game_Boy_Advance` |
+| GBC | `Nintendo_-_Game_Boy_Color` |
+| GG | `Sega_-_Game_Gear` |
+| MAME | `MAME` |
+| MD | `Sega_-_Mega_Drive_-_Genesis` |
+| NGPC | `SNK_-_Neo_Geo_Pocket_Color` |
+| PCE | `NEC_-_PC_Engine_-_TurboGrafx_16` |
+| PS | `Sony_-_PlayStation` |
+| SFC | `Nintendo_-_Super_Nintendo_Entertainment_System` |
+
+Images are at:
+```
+https://raw.githubusercontent.com/libretro-thumbnails/[REPO]/master/Named_Boxarts/[GAME_NAME].png
+```
+
+Where `[GAME_NAME]` is the ROM basename with spaces and special characters (`& * / : " < > ? \ |`) replaced by underscores.
 
 ---
 
