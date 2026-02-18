@@ -1,4 +1,4 @@
-# R36S Retro Handheld — Complete Wiki
+# R36SX Fake 2.6 Retro Handheld — Complete Wiki
 
 Complete guide for managing and customizing the **R36S** retro gaming handheld SD card.
 
