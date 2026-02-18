@@ -1,5 +1,3 @@
-# R36S-V2.6---Wiki
-
 # R36S Retro Handheld — Complete Wiki
 
 Complete guide for managing and customizing the **R36S** retro gaming handheld SD card.
