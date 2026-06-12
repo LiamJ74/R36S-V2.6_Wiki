@@ -6,6 +6,35 @@ The R36S is a cheap handheld sold under various brand names. It runs a Linux-bas
 
 ---
 
+## ⚠ Hardware Variant Warning — Read This First
+
+Devices sold as **R36S / R36SX / R36 / GB350** ship with multiple **non-interchangeable** hardware variants. Before attempting any custom firmware flash, **identify your variant** — flashing the wrong image will brick the device.
+
+**This wiki documents one specific variant**: an R36SX with a **MIPS32 SoC** running stock cubegm firmware. ROM management (sync scripts, cover art, CSV editing) applies to all variants. The firmware internals and CFW compatibility sections are variant-specific.
+
+Run the detection script to identify your variant before going further:
+
+```bash
+./detect_hardware.sh /Volumes/NOUVEAU\ NOM      # macOS
+./detect_hardware.sh /media/$USER/SDCARD        # Linux
+```
+
+```powershell
+.\detect_hardware.ps1 -RootPath "H:\"           # Windows
+```
+
+| Variant | CPU arch | SoC | Custom firmware support |
+|---------|----------|-----|-------------------------|
+| Genuine R36S (Anbernic) | ARM | Rockchip RK3326 | ✓ ArkOS, muOS, ROCKNIX, dArkOSRE |
+| R36SX v2.6 / v2.7 RK3326 clone | ARM | Rockchip RK3326 | ✓ ArkOS4Clone v2026-01+ (DTB: "Type 2 Without Amplifier") |
+| R36SX RK3128 clone | ARM | Rockchip RK3128 | ⚠ Partial — ROCKNIX / dArkOSRE only |
+| R36SX AllWinner A33 clone | ARM | AllWinner A33 | ⚠ Very limited |
+| **R36SX MIPS clone** *(this wiki's device)* | **MIPS32 rel2** | Ingenic-like / obscure | **✗ NONE — locked on stock cubegm forever** |
+
+See [FIRMWARE_VARIANTS.md](FIRMWARE_VARIANTS.md) for the deep dive (how to identify, what each variant can/cannot do, why the MIPS variant has no CFW path).
+
+---
+
 ## Table of Contents
 
 - [Quick Start](#quick-start)
@@ -501,7 +530,22 @@ Per-game core overrides can be set in `cubegm/cores/filelist.xml`:
 User settings are stored in `cubegm/setting.xml`:
 
 - Language, volume, brightness, screen mode
-- Hotkeys: SELECT+START (game menu), FN+A (quicksave), FN+B (quickload)
+- Sound effects, BGM file
+- Hotkeys (full list — these are the **only 4** hotkey functions exposed by the `rkgame` binary):
+
+| XML key | Default | Function |
+|---------|---------|----------|
+| `gamemenuhotkey` | `SELECT+START` | Open in-game quick menu (save state / load state UI) |
+| `quicksavehotkey` | `FN+A` | Quick save state |
+| `quickloadhotkey` | `FN+B` | Quick load state |
+| `quicksnaphotkey` | `FN+START` | Take a screenshot |
+| `savestatehotkey` | `DISABLE` | (Unused / disabled by default) |
+
+Hotkey combos are written as `KEY1+KEY2`. Recognized key names: `A`, `B`, `X`, `Y`, `L1`, `R1`, `L2`, `R2`, `SELECT`, `START`, `FN`, plus the d-pad directions on some firmware revisions. You can remap any of the 4 functions by editing `setting.xml` directly — useful if a physical button (e.g. `FN`) is faulty on your unit.
+
+**Not configurable / not present in `rkgame`:**
+- ❌ **No fast-forward / game-speed hotkey.** Binary strings expose `TurboKeyProcess` (auto-fire, button rapid-press) and `SetFrameSkip` (display frame skip — *does not* accelerate gameplay logic), but **no `fastforward` / `runahead` / `SetSpeed` function exists**. The libretro cores ship with `.so` files in `cubegm/cores/` that natively support fast-forward, but `rkgame` never sends them the command. Adding the hotkey to `setting.xml` does nothing — the binary doesn't have the function to bind to.
+- ❌ **No real-time clock.** This device has no RTC battery — all save files get the FAT32 epoch timestamp `1979-12-31 23:00:00`. Don't rely on file modification dates to identify recent saves.
 
 ---
 
@@ -531,16 +575,53 @@ User settings are stored in `cubegm/setting.xml`:
 
 **Fix:** Rename ROMs to avoid accented characters (é→e, è→e, ê→e, etc.) before running the sync script.
 
+### Duplicate `.sav` files (one with accent, one without) for the same ROM
+
+**Cause:** When a ROM name contains accented characters (e.g., `Pokemon - Sacha Cendré.gba`), there's an encoding mismatch between how the file appears on disk (UTF-8) and how `rkgame` writes the save path. The console writes saves to the **ASCII-stripped** filename (`Pokemon - Sacha Cendre.sav`), while saves transferred from a PC may land at the **accented** filename (`Pokemon - Sacha Cendré.sav`). The console then ignores the accented file because it never looks for that exact name.
+
+**Symptoms:**
+- You transfer a save from PC, the console shows "New Game" instead.
+- After playing, two `.sav` files exist for the same ROM.
+
+**Fix:** Identify which is which:
+- Console-written save → ASCII filename, timestamp `1979-12-31` (no RTC).
+- PC-transferred save → exact filename (may contain accents), timestamp from when you copied it.
+
+Then rename your real save to the ASCII version that the console actually reads, and delete the orphan:
+
+```bash
+# Backup first!
+cp "saves/Pokemon - Sacha Cendré.sav" /tmp/pokemon_save_backup.sav
+
+# Move PC save over the console save (if PC save is the one you want to keep)
+mv "saves/Pokemon - Sacha Cendré.sav" "saves/Pokemon - Sacha Cendre.sav"
+```
+
+Best practice: avoid accents in ROM filenames altogether (see previous troubleshooting entry).
+
 ### Save states missing after renaming ROMs
 
 **Cause:** Save states are stored by ROM filename in `cubegm/states/PLATFORM/`. Renaming a ROM breaks the link to its save state.
 
 **Fix:** Rename the corresponding save state files in `cubegm/states/` to match the new ROM name.
 
+### "I want fast-forward to grind Pokemon faster"
+
+**Cause:** Stock cubegm firmware has no fast-forward function (see [Settings](#settings)).
+
+**Fix:** Three options ordered by effort:
+1. **Accept it** — grind at 1x speed on the device.
+2. **PC emulator workflow** — copy your `.sav` from `cubegm/saves/` to a PC emulator (mGBA, VBA-M), grind at 5x speed, copy the updated `.sav` back. Format is identical (raw SRAM dump).
+3. **Switch hardware** — if you have an ARM variant (run `./detect_hardware.sh` to check), flash a custom firmware that ships with RetroArch (which has fast-forward bound to L2 by default). The MIPS variant has no CFW path; the only option is buying a different handheld (genuine R36S, Anbernic RG35XX H, etc.).
+
 ---
 
 ## Known Limitations
 
+- **No custom firmware path for the MIPS variant.** The device documented here ships a MIPS32 `rkgame` binary and proprietary `dsc.ko` display driver. All popular CFWs (ArkOS, muOS, ROCKNIX, dArkOSRE, ArkOS4Clone) are ARM-only and will not boot. The `dsc.ko` driver has no public source, making a port impractical. Stock cubegm is the only option for this hardware. See [FIRMWARE_VARIANTS.md](FIRMWARE_VARIANTS.md).
+- **No fast-forward / game-speed control.** The `rkgame` binary has no fast-forward function. See [Settings](#settings) and the fast-forward troubleshooting entry.
+- **No real-time clock.** All `.sav` and `.sv*` files get the FAT32 epoch timestamp (`1979-12-31`). File-date-based sync tools will see every save as "ancient."
+- **`rkgame` strips accented characters from save filenames.** A ROM named `Game (Français).gba` will produce a save called `Game (Francais).sav`. This causes silent "save not found" issues when transferring saves from PC. Stick to ASCII ROM filenames.
 - **GBC and GBA share similar platform icons** in the sidebar. The small icons are packed into sprite sheets (`Emu_Icon_0.raw` / `Emu_Icon_1.raw`) inside `UI_Res.cpd` with an undocumented format. The full-screen platform backgrounds can be customized (see [Customizing Platform Backgrounds](#customizing-platform-backgrounds)).
 - **Chinese names for new ROMs** are set to the ROM basename as a placeholder. Existing Chinese names in CSV and allfiles.lst are preserved on updates.
 - **Image matching is heuristic.** For ROMs with very different names from their cover art (e.g., a date-named screenshot), manual renaming before running the script is recommended.
